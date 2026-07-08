@@ -1,0 +1,29 @@
+{
+  "hosting": {
+    "public": "client/out",
+    "cleanUrls": true,
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "api",
+          "region": "us-central1"
+        }
+      }
+    ]
+  },
+  "functions": {
+    "source": "server",
+    "runtime": "nodejs20",
+    "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"],
+    "ignore": [
+      "node_modules",
+      ".git",
+      "*.local",
+      ".env",
+      "src/**/*.test.ts",
+      "vitest.config.*"
+    ]
+  }
+}

@@ -1,97 +1,107 @@
-# Deployment Guide
+# Deployment Guide — Firebase
 
-This app has two parts that deploy separately, both on **free** tiers:
+The app deploys to Firebase as **one project, one URL**:
 
-| Part | Stack | Free host | Why |
-|------|-------|-----------|-----|
-| `client/` | Next.js (static) | **Vercel** | Zero-config Next.js hosting, free URL |
-| `server/` | Express + Groq | **Render** | Free Node web service, runs the API |
+| Part | Firebase service | Notes |
+|------|------------------|-------|
+| `client/` (Next.js static) | **Hosting** | Free (Spark tier OK) |
+| `server/` (Express API) | **Cloud Functions (2nd gen)** | Requires **Blaze** plan |
 
-> Firebase's free (Spark) plan only serves static files, so it can't run the
-> Express backend. The frontend *could* go on Firebase Hosting (it builds to
-> static output), but Vercel is simpler for Next.js. Steps for Firebase static
-> hosting are at the bottom if you prefer it for the frontend.
+The frontend calls the API at `/api/...` on its own origin; a Hosting **rewrite**
+forwards `/api/**` to the `api` Cloud Function. Same origin = **no CORS setup**.
 
-Deploy the **backend first** so you have its URL for the frontend, then the
-frontend, then wire CORS back to the frontend URL.
+> ⚠️ **Blaze plan required for the backend.** Cloud Functions cannot run on the
+> free Spark plan — you must upgrade the project to **Blaze (pay-as-you-go)**,
+> which needs a billing card. Blaze includes a large always-free tier
+> (~2M function invocations/month), so a demo effectively costs $0, but the card
+> is mandatory. If you don't want to add billing, use the Render alternative at
+> the bottom (backend on Render free tier, frontend still on Firebase).
+
+Everything is already wired up in the repo:
+- [`firebase.json`](firebase.json) — Hosting (`client/out`) + `/api/**` → `api` function
+- [`.firebaserc`](.firebaserc) — set your project id here
+- `server/src/functions.ts` — wraps the Express app as the `api` function
+- `client/.env.production` — empty `NEXT_PUBLIC_API_URL` so the frontend calls `/api` same-origin
 
 ---
 
-## 1. Push to GitHub (both hosts deploy from the repo)
-
-Create an empty repo on GitHub (no README), then:
+## One-time setup
 
 ```bash
-git remote add origin https://github.com/<you>/<repo>.git
-git push -u origin main
+npm i -g firebase-tools     # install the CLI
+firebase login              # interactive Google login
 ```
 
-The commit is already made. `.env`, `.env.local`, `node_modules/`, `dist/`,
-and `.next/` are gitignored, and the real Groq key was redacted from
-`.env.example`.
+Create a Firebase project (or reuse one) at https://console.firebase.google.com,
+then upgrade it to the **Blaze** plan (Console → ⚙ → Usage and billing → Modify plan).
+
+Point the repo at your project:
+
+```bash
+firebase use --add          # pick your project, alias it "default"
+```
+
+This writes your project id into `.firebaserc` (replacing the placeholder).
 
 ---
 
-## 2. Backend → Render (free)
+## Deploy
 
-1. Go to https://render.com → **New** → **Web Service** → connect your GitHub repo.
-2. Render auto-detects [`render.yaml`](render.yaml). Confirm:
-   - Root directory: `server`
-   - Build: `npm install --include=dev && npm run build`
-   - Start: `npm start`
-   - Plan: **Free**
-3. Set the two secret env vars (marked `sync: false`):
-   - `GROQ_API_KEY` = your Groq key (`gsk_...`)
-   - `ALLOWED_ORIGINS` = leave as `*` for now; tighten to your Vercel URL in step 4.
-4. Deploy. Note the URL, e.g. `https://groweasy-csv-importer-api.onrender.com`.
-   Verify: open `<url>/health` → `{"status":"ok",...}`.
+From the repo root:
 
-> Note: Render's free tier **sleeps after ~15 min idle**; the first request
-> after sleeping takes ~30–60s to wake. Fine for a demo.
+```bash
+# 1. Store your Groq key as a Functions secret (one time; re-run to rotate)
+firebase functions:secrets:set GROQ_API_KEY
+#    → paste your gsk_... key when prompted
 
----
+# 2. Build the static frontend
+cd client && npm install && npm run build && cd ..
+#    → produces client/out
 
-## 3. Frontend → Vercel (free)
-
-1. Go to https://vercel.com → **Add New** → **Project** → import your repo.
-2. Set **Root Directory** to `client` (Framework auto-detects as Next.js).
-3. Add an environment variable:
-   - `NEXT_PUBLIC_API_URL` = your Render backend URL from step 2
-     (e.g. `https://groweasy-csv-importer-api.onrender.com`)
-4. Deploy. You get a free URL, e.g. `https://groweasy-csv-importer.vercel.app`.
-
-> `NEXT_PUBLIC_API_URL` is baked in at build time. If you change it later,
-> redeploy the frontend.
-
----
-
-## 4. Wire CORS back to the frontend
-
-On **Render**, set `ALLOWED_ORIGINS` to your exact Vercel URL:
-
-```
-ALLOWED_ORIGINS=https://groweasy-csv-importer.vercel.app
+# 3. Deploy hosting + functions together
+#    (the functions predeploy hook runs `npm run build` in server/ automatically)
+firebase deploy --only hosting,functions
 ```
 
-Save → Render redeploys. Done — open your Vercel URL and import a CSV
+When it finishes, the CLI prints your **Hosting URL**, e.g.
+`https://<project-id>.web.app` — that's your live app. Open it and import a CSV
 (there's a sample in `sample-data/`).
 
+### Redeploying after changes
+- Frontend change: `cd client && npm run build && cd .. && firebase deploy --only hosting`
+- Backend change: `firebase deploy --only functions`
+
 ---
 
-## Alternative: frontend on Firebase Hosting (free static)
+## Notes / gotchas
 
-The Next.js app builds to static output, so it can be hosted on Firebase's free
-tier. The **backend still needs Render** (Firebase free can't run it).
+- **First deploy of a gen-2 function** enables Cloud Run + Artifact Registry APIs
+  automatically; it can take a few minutes. If it errors asking to enable an API,
+  wait a minute and re-run the deploy.
+- **Cold starts:** an idle function takes ~1–3s on the first request.
+- **Secret used at runtime:** `GROQ_API_KEY` is injected only into the `api`
+  function (via `defineSecret` in `functions.ts`). Other settings (`AI_MODEL`,
+  `BATCH_SIZE`, `MAX_RETRIES`) fall back to sensible defaults in code; set them as
+  additional secrets/params only if you want to override.
+- **Function timeout** is set to 300s in `functions.ts`, but Firebase Hosting caps
+  a request at 60s. Very large CSVs may hit the Hosting limit — fine for demos.
+- **Local test before deploy:** `firebase emulators:start --only functions,hosting`
+  (run `cd client && npm run build` first so `client/out` exists).
 
-```bash
-npm i -g firebase-tools
-firebase login              # interactive
-cd client
-# add  output: 'export'  to next.config.js, then:
-npm run build               # produces client/out
-firebase init hosting       # public dir: out ; SPA: yes
-firebase deploy --only hosting
-```
+---
 
-Set `NEXT_PUBLIC_API_URL` to the Render URL before building, and add the
-Firebase URL to the backend's `ALLOWED_ORIGINS`.
+## Alternative: keep it free (no Blaze)
+
+Frontend on Firebase Hosting (free), backend on Render (free) — no billing card.
+
+1. Deploy the backend on Render using [`render.yaml`](render.yaml)
+   (New → Web Service → pick this repo → set `GROQ_API_KEY`). Note its URL.
+2. In `client/.env.production`, set `NEXT_PUBLIC_API_URL=https://<your-render-url>`
+   (full backend URL — cross-origin now, so CORS matters).
+3. On Render, set `ALLOWED_ORIGINS` to your Firebase Hosting URL.
+4. Remove the `functions` block and the `/api/**` rewrite from `firebase.json`
+   (Hosting-only), then:
+   ```bash
+   cd client && npm run build && cd ..
+   firebase deploy --only hosting
+   ```
