@@ -19,6 +19,6 @@ export function errorHandler(
 
   const message = err instanceof Error ? err.message : 'Unexpected server error.';
   logger.error('unhandled error', { error: message });
-  const status = /invalid file format/i.test(message) ? 400 : 500;
+  const status = /invalid file format|too large/i.test(message) ? 400 : 500;
   res.status(status).json({ success: false, error: message });
 }

@@ -5,6 +5,6 @@ import { handleImport } from '../controllers/import.controller';
 
 const router = Router();
 
-router.post('/import', upload.single('file'), validateImportRequest, handleImport);
+router.post('/import', upload, validateImportRequest, handleImport);
 
 export default router;

@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
+config();
+config({ path: '.env.local', override: true });
 import { createApp } from './app';
 import { logger } from './utils/logger';
 
