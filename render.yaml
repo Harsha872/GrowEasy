@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: groweasy-csv-importer-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: llama-3.3-70b-versatile
+      - key: BATCH_SIZE
+        value: "25"
+      - key: MAX_RETRIES
+        value: "3"
+      - key: ALLOWED_ORIGINS
+        sync: false
